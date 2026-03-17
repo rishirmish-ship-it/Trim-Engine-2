@@ -35,18 +35,25 @@ def load_data():
             "trim_id","trim_name","supplier","lot",
             "factory_unit","total_qty","balance","date_added"
         ])
+    return df
 
+def load_issue_data():
+    response = supabase.table("issues").select("*").execute()
+    df = pd.DataFrame(response.data)
+
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "trim_id","trim_name","lot",
+            "factory_unit","issued_qty","issued_to","issued_date"
+        ])
     return df
 
 # ---------------- GENERATE TRIM ID ----------------
 def generate_trim_id(df):
-
     if df.empty:
         return "TRM0001"
-
     last_id = df["trim_id"].iloc[-1]
     num = int(last_id.replace("TRM", "")) + 1
-
     return f"TRM{num:04d}"
 
 # ---------------- BARCODE PDF ----------------
@@ -72,7 +79,6 @@ def create_barcode_pdf(data):
         c.drawCentredString(width/2, 23*mm, f"Qty: {qty}")
 
         barcode = code128.Code128(trim_id, barHeight=12*mm, barWidth=0.45)
-
         barcode_x = (width - barcode.width) / 2
         barcode.drawOn(c, barcode_x, 8*mm)
 
@@ -92,7 +98,7 @@ st.sidebar.title("Navigation")
 
 page = st.sidebar.selectbox(
     "Go to",
-    ["Dashboard", "Add Trim", "Issue Trim", "Trim Data", "Print Barcodes", "Delete Trim"]
+    ["Dashboard", "Add Trim", "Issue Trim", "Trim Data", "Issue Data", "Print Barcodes", "Delete Trim"]
 )
 
 # ---------------- DASHBOARD ----------------
@@ -100,39 +106,34 @@ if page == "Dashboard":
 
     st.header("Inventory Dashboard")
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.metric("Total Trim Types", len(df))
-
-    with col2:
-        total_stock = df["balance"].sum() if not df.empty else 0
-        st.metric("Total Stock Available", int(total_stock))
-
-    # Today’s trims
-    st.subheader("Trims Added Today")
+    # ---------------- SUPPLIER CONTRIBUTION ----------------
+    st.subheader("Supplier-wise Stock Contribution")
 
     if not df.empty:
-        df["date_added"] = pd.to_datetime(df["date_added"], errors="coerce")
+        supplier_data = df.groupby("supplier")["balance"].sum().sort_values(ascending=False)
+        st.bar_chart(supplier_data)
+    else:
+        st.warning("No trim data available")
+
+    # ---------------- ISSUED TODAY ----------------
+    st.subheader("Issued Today")
+
+    issue_df = load_issue_data()
+
+    if not issue_df.empty:
+
+        issue_df["issued_date"] = pd.to_datetime(issue_df["issued_date"], errors="coerce")
         today = datetime.date.today()
 
-        today_trims = df[df["date_added"].dt.date == today]
+        today_issues = issue_df[issue_df["issued_date"].dt.date == today]
 
-        st.dataframe(today_trims)
+        if today_issues.empty:
+            st.info("No issues recorded today")
+        else:
+            st.dataframe(today_issues, use_container_width=True)
 
-    # Low stock
-    st.subheader("Low Stock (Below 50)")
-
-    if not df.empty:
-        low_stock = df[df["balance"] < 50]
-        st.dataframe(low_stock)
-
-    # Supplier graph
-    st.subheader("Supplier Contribution")
-
-    if not df.empty:
-        supplier_data = df.groupby("supplier")["balance"].sum()
-        st.bar_chart(supplier_data)
+    else:
+        st.warning("No issue data available")
 
 # ---------------- ADD TRIM ----------------
 elif page == "Add Trim":
@@ -142,7 +143,6 @@ elif page == "Add Trim":
     trim_name = st.text_input("Trim Name")
     supplier = st.text_input("Supplier")
     lot = st.text_input("Lot")
-
     factory_unit = st.selectbox("Factory Unit", ["Unit 10", "Unit 16"])
     qty = st.number_input("Quantity", min_value=0)
 
@@ -176,25 +176,42 @@ elif page == "Issue Trim":
         trim = df[df["trim_id"] == barcode_input].iloc[0]
 
         st.write("Trim Name:", trim["trim_name"])
-        st.write("Supplier:", trim["supplier"])
         st.write("Lot:", trim["lot"])
-        st.write("Factory Unit:", trim["factory_unit"])
         st.write("Available:", trim["balance"])
 
         issue_qty = st.number_input("Issue Quantity", min_value=0)
+        issued_to = st.text_input("Issued To (Line / Department / Person)")
 
         if st.button("Issue"):
 
             if issue_qty <= trim["balance"]:
 
-                new_balance = int(trim["balance"]) - int(issue_qty)
+                if issued_to.strip() == "":
+                    st.error("Please enter Issued To")
 
-                supabase.table("trims").update({
-                    "balance": new_balance
-                }).eq("trim_id", barcode_input).execute()
+                else:
+                    issued_to = issued_to.strip().title()
 
-                st.success("Trim Issued Successfully")
-                st.rerun()
+                    new_balance = int(trim["balance"]) - int(issue_qty)
+
+                    # Update balance
+                    supabase.table("trims").update({
+                        "balance": new_balance
+                    }).eq("trim_id", barcode_input).execute()
+
+                    # Insert issue record
+                    supabase.table("issues").insert({
+                        "trim_id": trim["trim_id"],
+                        "trim_name": trim["trim_name"],
+                        "lot": trim["lot"],
+                        "factory_unit": trim["factory_unit"],
+                        "issued_qty": int(issue_qty),
+                        "issued_to": issued_to,
+                        "issued_date": str(datetime.date.today())
+                    }).execute()
+
+                    st.success(f"Issued to {issued_to}")
+                    st.rerun()
 
             else:
                 st.error("Not enough stock")
@@ -204,22 +221,29 @@ elif page == "Trim Data":
 
     st.header("Trim Inventory Data")
 
-    if not df.empty:
+    if df.empty:
+        st.warning("No trim data available")
+    else:
 
-        trim_filter = st.selectbox(
-            "Filter by Trim Name",
-            ["All"] + df["trim_name"].dropna().unique().tolist()
-        )
+        col1, col2, col3 = st.columns(3)
 
-        supplier_filter = st.selectbox(
-            "Filter by Supplier",
-            ["All"] + df["supplier"].dropna().unique().tolist()
-        )
+        with col1:
+            trim_filter = st.selectbox(
+                "Filter by Trim Name",
+                ["All"] + df["trim_name"].dropna().unique().tolist()
+            )
 
-        unit_filter = st.selectbox(
-            "Filter by Factory Unit",
-            ["All"] + df["factory_unit"].dropna().unique().tolist()
-        )
+        with col2:
+            supplier_filter = st.selectbox(
+                "Filter by Supplier",
+                ["All"] + df["supplier"].dropna().unique().tolist()
+            )
+
+        with col3:
+            unit_filter = st.selectbox(
+                "Filter by Factory Unit",
+                ["All"] + df["factory_unit"].dropna().unique().tolist()
+            )
 
         filtered_df = df.copy()
 
@@ -232,7 +256,42 @@ elif page == "Trim Data":
         if unit_filter != "All":
             filtered_df = filtered_df[filtered_df["factory_unit"] == unit_filter]
 
-        st.dataframe(filtered_df)
+        st.dataframe(filtered_df, use_container_width=True)
+
+# ---------------- ISSUE DATA ----------------
+elif page == "Issue Data":
+
+    st.header("Issued Trim History")
+
+    issue_df = load_issue_data()
+
+    if issue_df.empty:
+        st.warning("No issue history available")
+    else:
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            trim_filter = st.selectbox("Trim", ["All"] + issue_df["trim_name"].dropna().unique().tolist())
+
+        with col2:
+            lot_filter = st.selectbox("Lot", ["All"] + issue_df["lot"].dropna().unique().tolist())
+
+        with col3:
+            issued_to_filter = st.selectbox("Issued To", ["All"] + issue_df["issued_to"].dropna().unique().tolist())
+
+        filtered_df = issue_df.copy()
+
+        if trim_filter != "All":
+            filtered_df = filtered_df[filtered_df["trim_name"] == trim_filter]
+
+        if lot_filter != "All":
+            filtered_df = filtered_df[filtered_df["lot"] == lot_filter]
+
+        if issued_to_filter != "All":
+            filtered_df = filtered_df[filtered_df["issued_to"] == issued_to_filter]
+
+        st.dataframe(filtered_df, use_container_width=True)
 
 # ---------------- PRINT BARCODES ----------------
 elif page == "Print Barcodes":
@@ -242,12 +301,9 @@ elif page == "Print Barcodes":
     if not df.empty:
 
         lots = df["lot"].dropna().unique().tolist()
-
         selected_lot = st.selectbox("Select Lot", lots)
 
         lot_data = df[df["lot"] == selected_lot]
-
-        st.dataframe(lot_data)
 
         if st.button("Generate Lot Barcode PDF"):
 
