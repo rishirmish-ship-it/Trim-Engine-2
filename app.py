@@ -10,6 +10,10 @@ from io import BytesIO
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="MENOLOGY TRIMS TRACKING SYSTEM", layout="wide")
 
+# ---------------- SESSION STATE ----------------
+if "success_msg" not in st.session_state:
+    st.session_state.success_msg = ""
+
 # ---------------- SUPABASE ----------------
 SUPABASE_URL = "https://unmwopzlrlezyurzkbyr.supabase.co"
 SUPABASE_KEY = "sb_publishable_HeiJNXkbvn2bdJq3BBA_jA_NGKjje_Z"
@@ -106,7 +110,7 @@ if page == "Dashboard":
 
     st.header("Inventory Dashboard")
 
-    # ---------------- SUPPLIER CONTRIBUTION ----------------
+    # Supplier Contribution
     st.subheader("Supplier-wise Stock Contribution")
 
     if not df.empty:
@@ -115,13 +119,12 @@ if page == "Dashboard":
     else:
         st.warning("No trim data available")
 
-    # ---------------- ISSUED TODAY ----------------
+    # Issued Today
     st.subheader("Issued Today")
 
     issue_df = load_issue_data()
 
     if not issue_df.empty:
-
         issue_df["issued_date"] = pd.to_datetime(issue_df["issued_date"], errors="coerce")
         today = datetime.date.today()
 
@@ -131,7 +134,6 @@ if page == "Dashboard":
             st.info("No issues recorded today")
         else:
             st.dataframe(today_issues, use_container_width=True)
-
     else:
         st.warning("No issue data available")
 
@@ -139,6 +141,11 @@ if page == "Dashboard":
 elif page == "Add Trim":
 
     st.header("Add Trim")
+
+    # Show success message AFTER rerun
+    if st.session_state.success_msg:
+        st.success(st.session_state.success_msg)
+        st.session_state.success_msg = ""
 
     trim_name = st.text_input("Trim Name")
     supplier = st.text_input("Supplier")
@@ -161,7 +168,7 @@ elif page == "Add Trim":
             "date_added": str(datetime.date.today())
         }).execute()
 
-        st.success(f"Trim Added: {trim_id}")
+        st.session_state.success_msg = f"Trim Added Successfully: {trim_id}"
         st.rerun()
 
 # ---------------- ISSUE TRIM ----------------
@@ -194,12 +201,10 @@ elif page == "Issue Trim":
 
                     new_balance = int(trim["balance"]) - int(issue_qty)
 
-                    # Update balance
                     supabase.table("trims").update({
                         "balance": new_balance
                     }).eq("trim_id", barcode_input).execute()
 
-                    # Insert issue record
                     supabase.table("issues").insert({
                         "trim_id": trim["trim_id"],
                         "trim_name": trim["trim_name"],
