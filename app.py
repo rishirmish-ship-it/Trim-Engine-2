@@ -14,6 +14,9 @@ st.set_page_config(page_title="MENOLOGY TRIMS TRACKING SYSTEM", layout="wide")
 if "success_msg" not in st.session_state:
     st.session_state.success_msg = ""
 
+if "issue_msg" not in st.session_state:
+    st.session_state.issue_msg = ""
+
 # ---------------- SUPABASE ----------------
 SUPABASE_URL = "https://unmwopzlrlezyurzkbyr.supabase.co"
 SUPABASE_KEY = "sb_publishable_HeiJNXkbvn2bdJq3BBA_jA_NGKjje_Z"
@@ -110,7 +113,6 @@ if page == "Dashboard":
 
     st.header("Inventory Dashboard")
 
-    # Supplier Contribution
     st.subheader("Supplier-wise Stock Contribution")
 
     if not df.empty:
@@ -119,7 +121,6 @@ if page == "Dashboard":
     else:
         st.warning("No trim data available")
 
-    # Issued Today
     st.subheader("Issued Today")
 
     issue_df = load_issue_data()
@@ -142,7 +143,6 @@ elif page == "Add Trim":
 
     st.header("Add Trim")
 
-    # Show success message AFTER rerun
     if st.session_state.success_msg:
         st.success(st.session_state.success_msg)
         st.session_state.success_msg = ""
@@ -175,6 +175,10 @@ elif page == "Add Trim":
 elif page == "Issue Trim":
 
     st.header("Issue Trim")
+
+    if st.session_state.issue_msg:
+        st.success(st.session_state.issue_msg)
+        st.session_state.issue_msg = ""
 
     barcode_input = st.text_input("Scan Trim ID")
 
@@ -215,7 +219,7 @@ elif page == "Issue Trim":
                         "issued_date": str(datetime.date.today())
                     }).execute()
 
-                    st.success(f"Issued to {issued_to}")
+                    st.session_state.issue_msg = f"Trim issued successfully to {issued_to}"
                     st.rerun()
 
             else:
