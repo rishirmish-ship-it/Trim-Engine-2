@@ -11,9 +11,9 @@ from io import BytesIO
 st.set_page_config(page_title="MENOLOGY TRIMS TRACKING SYSTEM", layout="wide")
 
 # ---------------- SUPABASE ----------------
+SUPABASE_URL = "https://unmwopzlrlezyurzkbyr.supabase.co"
+SUPABASE_KEY = "sb_publishable_HeiJNXkbvn2bdJq3BBA_jA_NGKjje_Z"
 
-SUPABASE_URL = st.secrets["https://unmwopzlrlezyurzkbyr.supabase.co"]
-SUPABASE_KEY = st.secrets["sb_publishable_HeiJNXkbvn2bdJq3BBA_jA_NGKjje_Z"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ---------------- HEADER ----------------
