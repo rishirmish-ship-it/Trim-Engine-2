@@ -88,9 +88,6 @@ page = st.sidebar.selectbox("Navigation", [
     "Dashboard","Add Trim","Issue Trim",
     "Trim Data","Issue Data","Print Barcodes","Delete Trim"
 ])
-
-import plotly.express as px
-
 # ---------------- DASHBOARD ----------------
 if page == "Dashboard":
     st.header("Inventory Dashboard")
