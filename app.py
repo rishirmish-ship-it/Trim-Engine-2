@@ -9,19 +9,11 @@ from io import BytesIO
 
 st.set_page_config(page_title="MENOLOGY TRIMS TRACKING SYSTEM", layout="wide")
 
-# ---------------- SESSION ----------------
-if "success_msg" not in st.session_state:
-    st.session_state.success_msg = ""
-
-if "form_key" not in st.session_state:
-    st.session_state.form_key = 0
-
 # ---------------- SUPABASE ----------------
 SUPABASE_URL = "https://unmwopzlrlezyurzkbyr.supabase.co"
 SUPABASE_KEY = "sb_publishable_HeiJNXkbvn2bdJq3BBA_jA_NGKjje_Z"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-st.title("MENOLOGY TRIMS TRACKING SYSTEM")
 
 # ---------------- LOAD ----------------
 @st.cache_data(ttl=5)
@@ -42,37 +34,24 @@ def generate_trim_id(df):
 # ---------------- BARCODE ----------------
 def create_barcode_pdf(data):
     buffer = BytesIO()
-
     width = 100 * mm
     height = 60 * mm
-
     c = canvas.Canvas(buffer, pagesize=(width, height))
 
     for _, row in data.iterrows():
 
-        trim_id = str(row["trim_id"])
-        trim_type = str(row["trim_type"])
-        trim_name = str(row["trim_name"])
-        size = str(row["size"]) if row["size"] else ""
-        order_no = str(row["order_no"])
-        qty = str(row["total_qty"])
+        code = f"{row['trim_name']}-{row['size']}" if row["size"] else row["trim_name"]
 
         c.setFont("Helvetica-Bold", 14)
-        c.drawCentredString(width/2, 52*mm, trim_id)
+        c.drawCentredString(width/2, 52*mm, code)
 
         c.setFont("Helvetica", 10)
-
-        detail = f"{trim_type}"
-        if trim_name:
-            detail += f" - {trim_name}"
-        if size:
-            detail += f" - {size}"
-
+        detail = f"{row['trim_type']} - {row['trim_name']}"
         c.drawCentredString(width/2, 45*mm, detail)
-        c.drawCentredString(width/2, 39*mm, f"Order: {order_no}")
-        c.drawCentredString(width/2, 34*mm, f"Qty: {qty}")
+        c.drawCentredString(width/2, 39*mm, f"Order: {row['order_no']}")
+        c.drawCentredString(width/2, 34*mm, f"Qty: {row['total_qty']}")
 
-        barcode = code128.Code128(trim_id, barHeight=20*mm, barWidth=0.6)
+        barcode = code128.Code128(code, barHeight=20*mm, barWidth=0.6)
         barcode.drawOn(c, (width - barcode.width)/2, 8*mm)
 
         c.showPage()
@@ -80,35 +59,73 @@ def create_barcode_pdf(data):
     c.save()
     return buffer.getvalue()
 
-# ---------------- LOAD DATA ----------------
 df = load_data()
 
 # ---------------- SIDEBAR ----------------
 page = st.sidebar.selectbox("Navigation", [
     "Dashboard","Add Trim","Issue Trim",
-    "Trim Data","Issue Data","Print Barcodes","Delete Trim"
+    "Trim Data","Issue Data","Print Barcodes",
+    "Edit Trim","Delete Trim"
 ])
+
 # ---------------- DASHBOARD ----------------
 if page == "Dashboard":
+    
+    # 🔹 TOP HEADER (Title LEFT, Logo RIGHT)
+    col1, col2 = st.columns([6, 1])
+
+    with col1:
+        st.title("MENOLOGY TRIMS TRACKING SYSTEM")
+
+    with col2:
+        st.image("logo.webp", width=120)
+
+    st.markdown("---")
+
     st.header("Inventory Dashboard")
 
+    # ---------------- DATA CHECK ----------------
     if df.empty:
         st.warning("No data available")
-    else:
 
-        # 🔥 LOW STOCK ALERT (LIMIT = 500)
-        st.subheader("⚠️Low Stock Alerts (Below 500)")
+    else:
+        # 🔥 KPI CARDS (CLEAN LOOK)
+        total_stock = df["balance"].sum()
+        total_items = len(df)
+        low_stock_count = len(df[df["balance"] < 500])
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric("Total Stock", int(total_stock))
+
+        with col2:
+            st.metric("Total Trim Entries", total_items)
+
+        with col3:
+            st.metric("Low Stock Items (<500)", low_stock_count)
+
+        st.markdown("---")
+
+        # 🔥 LOW STOCK ALERT
+        st.subheader("⚠️ Low Stock Alerts (Below 500)")
 
         low_stock = df[df["balance"] < 500]
 
         if not low_stock.empty:
+            low_stock["Display"] = low_stock["trim_name"] + "-" + low_stock["size"].fillna("")
+
             st.dataframe(low_stock[[
-                "trim_id","trim_type","trim_name","balance"
+                "Display",
+                "trim_type",
+                "supplier",
+                "order_no",
+                "balance"
             ]].reset_index(drop=True))
         else:
             st.success("No low stock items")
 
-    st.divider()
+    st.markdown("---")
 
     # 🔥 ISSUED TODAY
     st.subheader("Issued Today")
@@ -122,48 +139,87 @@ if page == "Dashboard":
         today_data = issue_df[issue_df["issued_date"].dt.date == today]
 
         if not today_data.empty:
-            st.dataframe(today_data.reset_index(drop=True))
+            today_data["Display"] = today_data["trim_name"] + "-" + today_data["size"].fillna("")
+
+            st.dataframe(today_data[[
+                "Display",
+                "issued_qty",
+                "issued_to",
+                "issued_date"
+            ]].reset_index(drop=True))
         else:
             st.info("No issues today")
     else:
         st.warning("No issue data available")
-
-
 # ---------------- ADD TRIM ----------------
 elif page == "Add Trim":
     st.header("Add Trim")
 
-    if st.session_state.success_msg:
-        st.success(st.session_state.success_msg)
-        st.session_state.success_msg = ""
+    # 🔹 DEFAULT VALUES
+    default_values = {
+        "trim_type": "Label",
+        "trim_name": "",
+        "size": "",
+        "supplier": "",
+        "invoice": "",
+        "order": "",
+        "location": "",
+        "color": "",
+        "unit": "Unit 1",
+        "qty": 0
+    }
 
-    # 🔹 Dynamic dropdown (outside form)
-    trim_type = st.selectbox("Select Trims", [
-        "Select","Label","Patch","Zip","Washcare","Button",
-        "Stopper","W/C","Puler","Rope","Locket",
-        "Clip","Sticker","Tape","Eyelet","Other"
-    ])
+    # 🔹 RESET FLAG
+    if "reset_flag" not in st.session_state:
+        st.session_state.reset_flag = False
 
-    with st.form(key=f"form_{st.session_state.form_key}"):
+    if st.session_state.reset_flag:
+        for key, val in default_values.items():
+            st.session_state[key] = val
+        st.session_state.reset_flag = False
 
-        trim_name = st.text_input("Trim Description")
+    # 🔹 INPUTS (WITH KEYS)
+    trim_type = st.selectbox(
+        "Trim Type",
+        [
+            "Label","Patch","Zip","Washcare","Button",
+            "Stopper","W/C","Puler","Rope","Locket",
+            "Clip","Sticker","Tape","Eyelet","Other"
+        ],
+        key="trim_type"
+    )
 
-        size = None
-        if trim_type == "Label":
-            size = st.text_input("Size")
+    trim_name = st.text_input("Trim Description (e.g., MN77)", key="trim_name").upper()
 
-        supplier = st.text_input("Supplier")
-        invoice = st.text_input("Invoice Number")
-        order = st.text_input("Order Number")
-        unit = st.selectbox("Factory Unit", ["Unit 1","Unit 2"])
-        qty = st.number_input("Quantity", min_value=0)
+    size = ""
+    if trim_type == "Label":
+        size = st.text_input("Size", key="size")
 
-        submit = st.form_submit_button("Add")
+    supplier = st.text_input("Supplier", key="supplier")
+    invoice = st.text_input("Invoice", key="invoice")
+    order = st.text_input("Order No", key="order")
+    location = st.text_input("Location", key="location")
+    color = st.text_input("Color", key="color")
 
-    if submit:
+    unit = st.selectbox("Unit", ["Unit 1","Unit 2"], key="unit")
+    qty = st.number_input("Quantity", min_value=0, key="qty")
 
-        if trim_type == "Select":
-            st.error("Select trim type")
+    # 🔹 BUTTONS
+    col1, col2 = st.columns(2)
+
+    with col1:
+        add_clicked = st.button("Add")
+
+    with col2:
+        reset_clicked = st.button("🔄 Reset Form")
+
+    msg = st.empty()
+
+    # 🔹 ADD LOGIC (NO AUTO RESET)
+    if add_clicked:
+
+        if not trim_name:
+            msg.error("Enter Trim Description")
 
         else:
             tid = generate_trim_id(df)
@@ -176,66 +232,111 @@ elif page == "Add Trim":
                 "supplier": supplier,
                 "invoice_no": invoice,
                 "order_no": order,
+                "location": location,
+                "color": color,
                 "factory_unit": unit,
                 "total_qty": int(qty),
                 "balance": int(qty),
                 "date_added": str(datetime.date.today())
             }).execute()
 
-            st.session_state.success_msg = f"Trim Added: {tid}"
-            st.session_state.form_key += 1
-            st.rerun()
+            msg.success(f"✅ Trim Added: {trim_name}-{size}")
 
-# ---------------- ISSUE ----------------
+            # ❌ NO st.rerun() → keeps values
+
+    # 🔹 RESET BUTTON (ONLY HERE RESET HAPPENS)
+    if reset_clicked:
+        st.session_state.reset_flag = True
+        st.cache_data.clear()
+        st.rerun()
+# ---------------- ISSUE TRIM (FIFO) ----------------
+# ---------------- ISSUE TRIM ----------------
 elif page == "Issue Trim":
     st.header("Issue Trim")
 
-    code = st.text_input("Scan Trim ID")
+    # 🔹 SCAN INPUT (MN77-S)
+    # 🔹 Create display list (MN77-S format)
+    df["Display"] = df["trim_name"] + "-" + df["size"].fillna("")
 
-    if code in df["trim_id"].values:
-        row = df[df["trim_id"] == code].iloc[0]
+    code = st.selectbox(
+    "Select / Scan Trim",
+    [""] + sorted(df["Display"].unique())
+)
 
-        st.subheader("Trim Details")
+    # 🔹 SPLIT TRIM NAME & SIZE
+    if "-" in code:
+        trim_name, size = code.split("-")
+    else:
+        trim_name, size = code, ""
 
-        col1, col2 = st.columns(2)
+    # 🔹 FILTER MATCHING STOCK (FIFO READY)
+    filtered = df[
+        (df["trim_name"] == trim_name) &
+        (df["size"].fillna("") == size) &
+        (df["balance"] > 0)
+    ]
 
-        with col1:
-            st.write("Trim ID:", row["trim_id"])
-            st.write("Type:", row["trim_type"])
-            st.write("Name:", row["trim_name"])
-            st.write("Size:", row["size"])
+    if not filtered.empty:
 
-        with col2:
-            st.write("Supplier:", row["supplier"])
-            st.write("Invoice:", row["invoice_no"])
-            st.write("Order:", row["order_no"])
-            st.write("Unit:", row["factory_unit"])
-            st.write("Available:", row["balance"])
+        # 🔹 SHOW TOTAL AVAILABLE
+        total_stock = filtered["balance"].sum()
+        st.subheader(f"Available Stock: {total_stock}")
 
         qty = st.number_input("Issue Qty", min_value=0)
         to = st.text_input("Issued To")
 
         if st.button("Issue"):
-            if qty <= row["balance"]:
 
-                supabase.table("trims_inventory").update({
-                    "balance": int(row["balance"]) - int(qty)
-                }).eq("trim_id", code).execute()
+            issue_qty = int(qty)
 
-                supabase.table("trims_issue_log").insert({
-                    "trim_id": row["trim_id"],
-                    "trim_type": row["trim_type"],
-                    "trim_name": row["trim_name"],
-                    "size": row["size"],
-                    "order_no": row["order_no"],
-                    "factory_unit": row["factory_unit"],
-                    "issued_qty": int(qty),
-                    "issued_to": to,
-                    "issued_date": str(datetime.date.today())
-                }).execute()
+            # 🔥 FIFO SORT
+            fifo = filtered.sort_values("date_added")
 
-                st.success("Issued Successfully")
-                st.rerun()
+            # 🔥 CAPTURE FIRST TRIM ID (IMPORTANT FIX)
+            first_trim_id = None
+
+            for i, r in fifo.iterrows():
+
+                if first_trim_id is None:
+                    first_trim_id = r["trim_id"]
+
+                if issue_qty <= 0:
+                    break
+
+                available = int(r["balance"])
+
+                if available >= issue_qty:
+                    new_balance = available - issue_qty
+
+                    supabase.table("trims_inventory").update({
+                        "balance": new_balance
+                    }).eq("trim_id", r["trim_id"]).execute()
+
+                    issue_qty = 0
+
+                else:
+                    supabase.table("trims_inventory").update({
+                        "balance": 0
+                    }).eq("trim_id", r["trim_id"]).execute()
+
+                    issue_qty -= available
+
+            # 🔥 ISSUE LOG (FIXED)
+            supabase.table("trims_issue_log").insert({
+                "trim_id": first_trim_id,   # ✅ REQUIRED FIELD
+                "trim_name": trim_name,
+                "size": size,
+                "issued_qty": int(qty),
+                "issued_to": to,
+                "issued_date": str(datetime.date.today())
+            }).execute()
+
+            st.success("Issued Successfully (FIFO Applied)")
+            st.cache_data.clear()
+            st.rerun()
+
+    else:
+        st.warning("No stock found for this Trim / Size")
 
 # ---------------- TRIM DATA ----------------
 elif page == "Trim Data":
@@ -243,20 +344,34 @@ elif page == "Trim Data":
 
     if not df.empty:
 
+        # 🔹 FILTERS
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            type_f = st.selectbox("Trim Type", ["All"] + df["trim_type"].dropna().unique().tolist())
+            type_f = st.selectbox(
+                "Trim Type",
+                ["All"] + df["trim_type"].dropna().unique().tolist()
+            )
 
         with col2:
-            supplier_f = st.selectbox("Supplier", ["All"] + df["supplier"].dropna().unique().tolist())
+            supplier_f = st.selectbox(
+                "Supplier",
+                ["All"] + df["supplier"].dropna().unique().tolist()
+            )
 
         with col3:
-            order_f = st.selectbox("Order Number", ["All"] + df["order_no"].dropna().unique().tolist())
+            order_f = st.selectbox(
+                "Order Number",
+                ["All"] + df["order_no"].dropna().unique().tolist()
+            )
 
         with col4:
-            unit_f = st.selectbox("Unit", ["All"] + df["factory_unit"].dropna().unique().tolist())
+            unit_f = st.selectbox(
+                "Unit",
+                ["All"] + df["factory_unit"].dropna().unique().tolist()
+            )
 
+        # 🔹 APPLY FILTERS
         data = df.copy()
 
         if type_f != "All":
@@ -271,49 +386,100 @@ elif page == "Trim Data":
         if unit_f != "All":
             data = data[data["factory_unit"] == unit_f]
 
-        data["Display"] = data["trim_type"] + " - " + data["trim_name"].fillna("") + " - " + data["size"].fillna("")
+        # 🔹 DISPLAY COLUMN
+        data["Display"] = data["trim_name"] + "-" + data["size"].fillna("")
 
+        # 🔥 IMPORTANT: INCLUDE trim_type HERE
+        data["date_added"] = pd.to_datetime(data["date_added"]).dt.strftime("%d-%m-%Y")
         st.dataframe(data[[
-            "trim_id","Display","supplier","invoice_no",
-            "order_no","factory_unit","total_qty","balance"
-        ]].reset_index(drop=True))
+    "trim_id",
+    "Display",
+    "trim_type",
+    "supplier",
+    "invoice_no",
+    "order_no",
+    "factory_unit",
+    "total_qty",
+    "balance",
+    "color",
+    "date_added"   # ✅ ADD THIS
+]].reset_index(drop=True))
+
+    else:
+        st.warning("No data available")
 
 # ---------------- ISSUE DATA ----------------
 elif page == "Issue Data":
     st.header("Issue Data")
+    st.dataframe(load_issue_data())
 
-    issue_df = load_issue_data()
-    if not issue_df.empty:
-        st.dataframe(issue_df.reset_index(drop=True))
-
-# ---------------- PRINT ----------------
+# ---------------- PRINT BARCODE (BULK) ----------------
 elif page == "Print Barcodes":
     st.header("Print Barcodes")
 
-    mode = st.radio("Mode", ["Order Wise","Individual"])
+    if not df.empty:
+        df["Display"] = df["trim_name"] + "-" + df["size"].fillna("")
 
-    if mode == "Order Wise":
-        orders = df["order_no"].dropna().unique()
-        sel = st.selectbox("Order", orders)
-
-        if st.button("Generate"):
-            pdf = create_barcode_pdf(df[df["order_no"] == sel])
-            st.download_button("Download", pdf, f"{sel}.pdf")
-
-    else:
-        tid = st.selectbox("Trim ID", df["trim_id"])
+        selected_list = st.multiselect(
+            "Select Trims",
+            sorted(df["Display"].unique())
+        )
 
         if st.button("Generate"):
-            pdf = create_barcode_pdf(df[df["trim_id"] == tid])
-            st.download_button("Download", pdf, f"{tid}.pdf")
+            final_data = pd.DataFrame()
+
+            for selected in selected_list:
+
+                if "-" in selected:
+                    trim_name, size = selected.split("-")
+                else:
+                    trim_name, size = selected, ""
+
+                temp = df[
+                    (df["trim_name"] == trim_name) &
+                    (df["size"].fillna("") == size)
+                ]
+
+                final_data = pd.concat([final_data, temp])
+
+            pdf = create_barcode_pdf(final_data)
+
+            st.download_button("Download", pdf, "bulk_barcodes.pdf")
+
+# ---------------- EDIT ----------------
+elif page == "Edit Trim":
+    st.header("Edit Trim")
+
+    tid = st.selectbox("Select", df["trim_id"])
+    row = df[df["trim_id"] == tid].iloc[0]
+
+    trim_name = st.text_input("Trim Name", row["trim_name"])
+    size = st.text_input("Size", row["size"])
+    total_qty = st.number_input("Total Qty", int(row["total_qty"]))
+
+    issued = int(row["total_qty"]) - int(row["balance"])
+    balance = total_qty - issued
+
+    if st.button("Update"):
+        supabase.table("trims_inventory").update({
+            "trim_name": trim_name,
+            "size": size,
+            "total_qty": total_qty,
+            "balance": balance
+        }).eq("trim_id", tid).execute()
+
+        st.success("Updated")
+        st.cache_data.clear()
+        st.rerun()
 
 # ---------------- DELETE ----------------
 elif page == "Delete Trim":
     st.header("Delete Trim")
 
-    tid = st.selectbox("Trim ID", df["trim_id"])
+    tid = st.selectbox("Select", df["trim_id"])
 
     if st.button("Delete"):
         supabase.table("trims_inventory").delete().eq("trim_id", tid).execute()
         st.success("Deleted")
+        st.cache_data.clear()
         st.rerun()
